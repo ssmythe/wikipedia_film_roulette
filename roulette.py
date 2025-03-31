@@ -226,6 +226,9 @@ def main():
         })
         attempts += 1
 
+    # Sort the results
+    results.sort(key=lambda x: (x["Country"], x["Genre"], x["Subgenre"], x["Film"]))
+
     # Dynamically calculate column widths
     col_widths = {
         key: max(len(key), max((len(row[key]) for row in results), default=0)) + 2

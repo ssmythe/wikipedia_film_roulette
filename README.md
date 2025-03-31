@@ -14,7 +14,7 @@ No sign-ups, no API keys, no fluff — just curated exploration using public dat
 - 📌 Command-line overrides for country (`-c`), genre (`-g`), and subgenre (`-s`)
 - ❌ Deduplication to avoid repeated picks
 - 🧠 Debug and verbose modes for diagnostics
-- 📊 Clean, auto-sized table output
+- 📊 Clean, auto-sized table output sorted by country, genre, subgenre, and film
 
 ---
 
@@ -104,3 +104,4 @@ Made with ❤️ and a love for global cinema.
 
 _“A good film is when the price of the dinner, the theatre admission and the babysitter were worth it.”_  
 — Alfred Hitchcock
+
