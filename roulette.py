@@ -19,26 +19,31 @@ CACHE_EXPIRATION = 7 * 24 * 3600  # 1 week in seconds
 VERBOSE = False
 DEBUG = False
 
-
 def verbose_print(msg):
     if VERBOSE:
         print(msg)
 
-
 def debug_print(msg):
     if DEBUG:
         print(f"[DEBUG] {msg}")
-
 
 def get_cache_filename(url, category):
     h = hashlib.sha256(url.encode("utf-8")).hexdigest()
     filename = os.path.join(CACHE_DIR, category, f"{h}.html")
     return filename
 
+def clean_url(url):
+    url = url.strip()
+    if url.startswith("http"):
+        return url
+    if url.startswith("//"):
+        return f"https:{url}"
+    return f"https://en.wikipedia.org{url}"
 
 def get_cached_page(url, category, headers=None):
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; FilmRouletteBot/1.0)"}
+    url = clean_url(url)
     filename = get_cache_filename(url, category)
     os.makedirs(os.path.join(CACHE_DIR, category), exist_ok=True)
     if os.path.exists(filename):
@@ -57,10 +62,10 @@ def get_cached_page(url, category, headers=None):
 
 
 def clean_url(url):
-    prefix = "https://en.wikipedia.org"
-    if url.startswith(prefix + prefix):
-        return prefix + url[len(prefix) * 2 :]
-    return url
+    if url.startswith("http"):
+        return url
+    return f"https://en.wikipedia.org{url}"
+
 
 
 def fetch_live_country_links():
@@ -153,7 +158,7 @@ def search_global_subgenre_links(country, genre):
     for k in keywords:
         for sub in common_subgenres:
             cat = f"{k} {sub} films".replace("  ", " ")
-            url = base_url + "_".join(cat.split())
+            url = clean_url("/wiki/Category:" + "_".join(cat.split()))
             options.append({"subgenre": cat, "url": url})
     return options
 
