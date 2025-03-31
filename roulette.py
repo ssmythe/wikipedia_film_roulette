@@ -19,29 +19,43 @@ CACHE_EXPIRATION = 7 * 24 * 3600  # 1 week in seconds
 VERBOSE = False
 DEBUG = False
 
+
 def verbose_print(msg):
     if VERBOSE:
         print(msg)
 
+
 def debug_print(msg):
     if DEBUG:
         print(f"[DEBUG] {msg}")
+
 
 def get_cache_filename(url, category):
     h = hashlib.sha256(url.encode("utf-8")).hexdigest()
     filename = os.path.join(CACHE_DIR, category, f"{h}.html")
     return filename
 
+
 def clean_url(url):
-    url = url.strip()
+    """
+    Normalize and sanitize any Wikipedia-related URL fragment or full link.
+    - If already a full URL, return as-is.
+    - If protocol-relative, convert to https.
+    - If relative, prepend Wikipedia base.
+    - Strip duplicated or malformed fragments.
+    """
+    url = str(url).strip()
+
+    # Normalize common corruptions
     url = url.replace("en.wikipedia.orghttps", "en.wikipedia.org")
-    # Remove duplicated domain
-    if url.startswith("https://en.wikipedia.org//en.wikipedia.org"):
-        url = url.replace("https://en.wikipedia.org//en.wikipedia.org", "https://en.wikipedia.org")
-    elif url.startswith("//en.wikipedia.org//en.wikipedia.org"):
-        url = url.replace("//en.wikipedia.org//en.wikipedia.org", "//en.wikipedia.org")
-    elif url.startswith("/en.wikipedia.org"):
-        url = url[len("/en.wikipedia.org"):]
+    url = url.replace(
+        "https://en.wikipedia.org//en.wikipedia.org", "https://en.wikipedia.org"
+    )
+    url = url.replace("//en.wikipedia.org//en.wikipedia.org", "//en.wikipedia.org")
+    if url.startswith("/en.wikipedia.org"):
+        url = url[len("/en.wikipedia.org") :]
+
+    # Return valid full URL
     if url.startswith("https://en.wikipedia.org"):
         return url
     if url.startswith("http"):
@@ -50,10 +64,8 @@ def clean_url(url):
         return f"https:{url}"
     return f"https://en.wikipedia.org{url}"
 
+
 def get_cached_page(raw_url, category, headers=None):
-    raw_url = str(raw_url).strip().replace("en.wikipedia.orghttps", "en.wikipedia.org")
-    if headers is None:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; FilmRouletteBot/1.0)"}
     url = clean_url(raw_url)
     filename = get_cache_filename(url, category)
     os.makedirs(os.path.join(CACHE_DIR, category), exist_ok=True)
@@ -70,12 +82,6 @@ def get_cached_page(raw_url, category, headers=None):
     with open(filename, "wb") as f:
         f.write(content)
     return content
-
-def clean_url(url):
-    if url.startswith("http"):
-        return url
-    return f"https://en.wikipedia.org{url}"
-
 
 
 def fetch_live_country_links():
