@@ -34,16 +34,27 @@ def get_cache_filename(url, category):
 
 def clean_url(url):
     url = url.strip()
+    url = url.replace("en.wikipedia.orghttps", "en.wikipedia.org")
+    # Remove duplicated domain
+    if url.startswith("https://en.wikipedia.org//en.wikipedia.org"):
+        url = url.replace("https://en.wikipedia.org//en.wikipedia.org", "https://en.wikipedia.org")
+    elif url.startswith("//en.wikipedia.org//en.wikipedia.org"):
+        url = url.replace("//en.wikipedia.org//en.wikipedia.org", "//en.wikipedia.org")
+    elif url.startswith("/en.wikipedia.org"):
+        url = url[len("/en.wikipedia.org"):]
+    if url.startswith("https://en.wikipedia.org"):
+        return url
     if url.startswith("http"):
         return url
     if url.startswith("//"):
         return f"https:{url}"
     return f"https://en.wikipedia.org{url}"
 
-def get_cached_page(url, category, headers=None):
+def get_cached_page(raw_url, category, headers=None):
+    raw_url = str(raw_url).strip().replace("en.wikipedia.orghttps", "en.wikipedia.org")
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; FilmRouletteBot/1.0)"}
-    url = clean_url(url)
+    url = clean_url(raw_url)
     filename = get_cache_filename(url, category)
     os.makedirs(os.path.join(CACHE_DIR, category), exist_ok=True)
     if os.path.exists(filename):
@@ -59,7 +70,6 @@ def get_cached_page(url, category, headers=None):
     with open(filename, "wb") as f:
         f.write(content)
     return content
-
 
 def clean_url(url):
     if url.startswith("http"):
