@@ -19,53 +19,37 @@ CACHE_EXPIRATION = 7 * 24 * 3600  # 1 week in seconds
 VERBOSE = False
 DEBUG = False
 
-
 def verbose_print(msg):
     if VERBOSE:
         print(msg)
 
-
 def debug_print(msg):
     if DEBUG:
         print(f"[DEBUG] {msg}")
-
 
 def get_cache_filename(url, category):
     h = hashlib.sha256(url.encode("utf-8")).hexdigest()
     filename = os.path.join(CACHE_DIR, category, f"{h}.html")
     return filename
 
-
 def clean_url(url):
     """
-    Normalize and sanitize any Wikipedia-related URL fragment or full link.
-    - If already a full URL, return as-is.
-    - If protocol-relative, convert to https.
-    - If relative, prepend Wikipedia base.
-    - Strip duplicated or malformed fragments.
+    Normalize and sanitize any Wikipedia URL (full, protocol-relative, or relative).
+    Uses a regular expression to collapse duplicate base URLs.
     """
     url = str(url).strip()
-
-    # Normalize common corruptions
-    url = url.replace("en.wikipedia.orghttps", "en.wikipedia.org")
-    url = url.replace(
-        "https://en.wikipedia.org//en.wikipedia.org", "https://en.wikipedia.org"
-    )
-    url = url.replace("//en.wikipedia.org//en.wikipedia.org", "//en.wikipedia.org")
-    if url.startswith("/en.wikipedia.org"):
-        url = url[len("/en.wikipedia.org") :]
-
-    # Return valid full URL
-    if url.startswith("https://en.wikipedia.org"):
-        return url
-    if url.startswith("http"):
-        return url
     if url.startswith("//"):
-        return f"https:{url}"
-    return f"https://en.wikipedia.org{url}"
-
+        url = "https:" + url
+    url = re.sub(r'(https?://en\.wikipedia\.org)+', 'https://en.wikipedia.org', url)
+    if not url.startswith("http"):
+        url = "https://en.wikipedia.org" + url
+    return url
 
 def get_cached_page(raw_url, category, headers=None):
+    """
+    Fetches the page content for a URL (using the cache if possible). In case of an HTTP error
+    (like a 404), logs a message and returns None.
+    """
     url = clean_url(raw_url)
     filename = get_cache_filename(url, category)
     os.makedirs(os.path.join(CACHE_DIR, category), exist_ok=True)
@@ -76,17 +60,35 @@ def get_cached_page(raw_url, category, headers=None):
             with open(filename, "rb") as f:
                 return f.read()
     verbose_print(f"[Fetch] Fetching {category} page from {url}")
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        verbose_print(f"[Error] Fetching {category} page from {url} resulted in: {e}")
+        return None
     content = response.content
     with open(filename, "wb") as f:
         f.write(content)
     return content
 
+def extract_category_label(url):
+    """
+    Given a Wikipedia category URL, extract a human-friendly label.
+    For example, from '/wiki/Category:Nigerian_political_satire_films?oldid=933401930'
+    this returns 'Nigerian political satire'.
+    """
+    m = re.search(r'Category:([^?&]+)', url)
+    if m:
+        label = m.group(1).replace('_', ' ')
+        label = re.sub(r'\s*films\s*$', '', label, flags=re.IGNORECASE).strip()
+        return label
+    return url  # fallback
 
 def fetch_live_country_links():
     url = "https://en.wikipedia.org/wiki/Category:Films_by_country_and_genre"
     content = get_cached_page(url, "country")
+    if content is None:
+        return []
     soup = BeautifulSoup(content, "html.parser")
     results = []
     for a in soup.find_all("a", href=True):
@@ -94,19 +96,17 @@ def fetch_live_country_links():
         match = re.match(r"(.+?) films by genre", text, re.IGNORECASE)
         if match:
             country = match.group(1).strip()
-            href = a["href"]
-            results.append(
-                {
-                    "country": country,
-                    "genre_page_url": f"https://en.wikipedia.org{href}",
-                }
-            )
+            results.append({
+                "country": country,
+                "genre_page_url": clean_url(a["href"]),
+            })
     debug_print(f"Fetched {len(results)} country links.")
     return results
 
-
 def get_genre_links_from_live_page(url):
     content = get_cached_page(url, "genre")
+    if content is None:
+        return []
     soup = BeautifulSoup(content, "html.parser")
     results = []
     subcat_div = soup.find("div", id="mw-subcategories")
@@ -115,25 +115,30 @@ def get_genre_links_from_live_page(url):
         debug_print(subcat_div.get_text(separator=" | ", strip=True))
         for a in subcat_div.find_all("a", href=True):
             genre_text = a.get_text(strip=True)
-            results.append(
-                {"genre": genre_text, "url": f"https://en.wikipedia.org{a['href']}"}
-            )
+            results.append({
+                "genre": genre_text,
+                "url": clean_url(a["href"]),
+            })
     else:
-        debug_print(
-            "No mw-subcategories container found; scanning entire page for genre links."
-        )
+        debug_print("No mw-subcategories container found; scanning entire page for genre links.")
         for a in soup.find_all("a", href=True):
             text = a.get_text(strip=True)
             if "films" in text.lower():
-                results.append(
-                    {"genre": text, "url": f"https://en.wikipedia.org{a['href']}"}
-                )
+                results.append({
+                    "genre": text,
+                    "url": clean_url(a["href"]),
+                })
     debug_print(f"Found {len(results)} genre links from {url}")
     return results
 
-
 def get_film_titles_from_live_page(url, category="film"):
+    """
+    Fetch film titles from a live page. If the page couldn’t be fetched (e.g. 404),
+    return an empty list.
+    """
     content = get_cached_page(url, category)
+    if content is None:
+        return []
     soup = BeautifulSoup(content, "html.parser")
     film_titles = []
     pages_div = soup.find("div", id="mw-pages")
@@ -142,14 +147,12 @@ def get_film_titles_from_live_page(url, category="film"):
             film_titles.append(li.get_text(strip=True))
     return list(dict.fromkeys(film_titles))  # remove duplicates
 
-
 def simplify_label(label, country):
     label = label.strip()
     if label.lower().startswith(country.lower()):
-        label = label[len(country) :].strip()
+        label = label[len(country):].strip()
     label = re.sub(r"\bfilms\b", "", label, flags=re.IGNORECASE).strip()
     return label
-
 
 def suggest_closest(match_to, options):
     lower_match = match_to.lower()
@@ -159,9 +162,7 @@ def suggest_closest(match_to, options):
     matches = difflib.get_close_matches(match_to, options, n=1, cutoff=0.5)
     return matches[0] if matches else None
 
-
 def search_global_subgenre_links(country, genre):
-    base_url = "https://en.wikipedia.org/wiki/Category:"
     keywords = [f"{country} {genre}".strip(), country, genre]
     options = []
     common_subgenres = [
@@ -178,9 +179,10 @@ def search_global_subgenre_links(country, genre):
             options.append({"subgenre": cat, "url": url})
     return options
 
-
 def get_final_film_titles(url, desired_subgenre=None, country="", genre=""):
     content = get_cached_page(url, "film")
+    if content is None:
+        return [], ""
     soup = BeautifulSoup(content, "html.parser")
     subgenre_links = []
     seen_subgenres = set()
@@ -189,60 +191,50 @@ def get_final_film_titles(url, desired_subgenre=None, country="", genre=""):
     if subcat_div:
         for a in subcat_div.find_all("a", href=True):
             label = a.get_text(strip=True)
+            # If the text looks like a URL, extract a proper label from the href.
+            if label.startswith("http"):
+                label = extract_category_label(a["href"])
             if label not in seen_subgenres:
-                subgenre_links.append(
-                    {"url": f"https://en.wikipedia.org{a['href']}", "subgenre": label}
-                )
+                subgenre_links.append({
+                    "url": clean_url(a["href"]),
+                    "subgenre": label
+                })
                 seen_subgenres.add(label)
 
     for a in soup.find_all("a", href=True):
         label = a.get_text(strip=True)
+        if label.startswith("http"):
+            label = extract_category_label(a["href"])
         if "film" in label.lower() and label not in seen_subgenres:
-            subgenre_links.append(
-                {"url": f"https://en.wikipedia.org{a['href']}", "subgenre": label}
-            )
+            subgenre_links.append({
+                "url": clean_url(a["href"]),
+                "subgenre": label
+            })
             seen_subgenres.add(label)
 
     if desired_subgenre:
         subgenre_names = [s["subgenre"] for s in subgenre_links]
         suggestion = suggest_closest(desired_subgenre, subgenre_names)
         if suggestion:
-            matched = next(
-                (s for s in subgenre_links if s["subgenre"] == suggestion), None
-            )
+            matched = next((s for s in subgenre_links if s["subgenre"] == suggestion), None)
             if matched:
-                verbose_print(
-                    f"Using subgenre '{suggestion}' (matched from '{desired_subgenre}')"
-                )
-                films = get_film_titles_from_live_page(
-                    matched["url"], category="subgenre"
-                )
+                verbose_print(f"Using subgenre '{suggestion}' (matched from '{desired_subgenre}')")
+                films = get_film_titles_from_live_page(matched["url"], category="subgenre")
                 return films, simplify_label(matched["subgenre"], "")
-
         guessed_links = search_global_subgenre_links(country, genre)
         guessed_names = [g["subgenre"] for g in guessed_links]
         guessed_suggestion = suggest_closest(desired_subgenre, guessed_names)
         if guessed_suggestion:
-            guessed_match = next(
-                g for g in guessed_links if g["subgenre"] == guessed_suggestion
-            )
-            verbose_print(
-                f"Using guessed global subgenre '{guessed_suggestion}' ({guessed_match['url']})"
-            )
-            films = get_film_titles_from_live_page(
-                guessed_match["url"], category="subgenre"
-            )
+            guessed_match = next(g for g in guessed_links if g["subgenre"] == guessed_suggestion)
+            verbose_print(f"Using guessed global subgenre '{guessed_suggestion}' ({guessed_match['url']})")
+            films = get_film_titles_from_live_page(guessed_match["url"], category="subgenre")
             return films, simplify_label(guessed_match["subgenre"], "")
-
-        print(
-            f"Error: Specified subgenre '{desired_subgenre}' not found.",
-            file=sys.stderr,
-        )
+        print(f"Error: Specified subgenre '{desired_subgenre}' not found.", file=sys.stderr)
         sys.exit(1)
 
     films = get_film_titles_from_live_page(url, category="film")
-
     if subgenre_links:
+        # Randomly try diving into one of the subgenre pages.
         if random.choice([True, False]):
             chosen = random.choice(subgenre_links)
             verbose_print(f"Diving into subgenre page: {chosen['url']}")
@@ -256,19 +248,14 @@ def get_final_film_titles(url, desired_subgenre=None, country="", genre=""):
             return films, simplify_label(chosen["subgenre"], "")
     return films, ""
 
-
 def main():
     global VERBOSE, DEBUG
     parser = argparse.ArgumentParser(
         description="Film Roulette - Randomly pick films from Wikipedia"
     )
-    parser.add_argument(
-        "-n", type=int, default=1, help="Number of random films to list out"
-    )
+    parser.add_argument("-n", type=int, default=1, help="Number of random films to list out")
     parser.add_argument("-v", action="store_true", help="Enable verbose output")
-    parser.add_argument(
-        "-d", action="store_true", help="Enable debug output (requires -v)"
-    )
+    parser.add_argument("-d", action="store_true", help="Enable debug output (requires -v)")
     parser.add_argument("-c", type=str, help="Specify a country (e.g. 'American')")
     parser.add_argument("-g", type=str, help="Specify a genre (e.g. 'science fiction')")
     parser.add_argument("-s", type=str, help="Specify a subgenre (e.g. 'time travel')")
@@ -277,42 +264,39 @@ def main():
     DEBUG = args.d and args.v
 
     if DEBUG:
-        debug_print(
-            f"CLI Options: n={args.n}, country={args.c}, genre={args.g}, subgenre={args.s}"
-        )
+        debug_print(f"CLI Options: n={args.n}, country={args.c}, genre={args.g}, subgenre={args.s}")
 
     results = []
     attempts = 0
     max_attempts = args.n * 5
 
     country_links = fetch_live_country_links()
+    if not country_links:
+        print("Error: Could not fetch country links.", file=sys.stderr)
+        sys.exit(1)
 
     while len(results) < args.n and attempts < max_attempts:
         if args.c:
             country_names = [c["country"] for c in country_links]
-            matching = [
-                c for c in country_links if args.c.lower() == c["country"].lower()
-            ]
+            matching = [c for c in country_links if args.c.lower() == c["country"].lower()]
             if matching:
                 chosen_country = matching[0]
                 verbose_print(f"Using specified country: {args.c}")
             else:
                 suggestion = suggest_closest(args.c, country_names)
                 if suggestion:
-                    print(
-                        f"Error: Specified country '{args.c}' not found. Did you mean '{suggestion}'?",
-                        file=sys.stderr,
-                    )
+                    print(f"Error: Specified country '{args.c}' not found. Did you mean '{suggestion}'?", file=sys.stderr)
                 else:
-                    print(
-                        f"Error: Specified country '{args.c}' not found.",
-                        file=sys.stderr,
-                    )
+                    print(f"Error: Specified country '{args.c}' not found.", file=sys.stderr)
                 sys.exit(1)
         else:
             chosen_country = random.choice(country_links)
 
         genre_links = get_genre_links_from_live_page(chosen_country["genre_page_url"])
+        if not genre_links:
+            verbose_print(f"No genres found for {chosen_country['country']}. Skipping.")
+            attempts += 1
+            continue
 
         if args.g:
             genre_names = [
@@ -320,35 +304,24 @@ def main():
                 for g in genre_links
             ]
             filtered_genres = [
-                g
-                for g in genre_links
-                if args.g.lower()
-                in simplify_label(g["genre"], chosen_country["country"]).lower()
+                g for g in genre_links
+                if args.g.lower() in simplify_label(g["genre"], chosen_country["country"]).lower()
             ]
             if filtered_genres:
                 chosen_genre = random.choice(filtered_genres)
             else:
                 suggestion = suggest_closest(args.g, genre_names)
                 if suggestion:
-                    print(
-                        f"Error: Specified genre '{args.g}' not found. Did you mean '{suggestion}'?",
-                        file=sys.stderr,
-                    )
+                    print(f"Error: Specified genre '{args.g}' not found. Did you mean '{suggestion}'?", file=sys.stderr)
                 else:
-                    print(
-                        f"Error: Specified genre '{args.g}' not found.", file=sys.stderr
-                    )
+                    print(f"Error: Specified genre '{args.g}' not found.", file=sys.stderr)
                 sys.exit(1)
         else:
             chosen_genre = random.choice(genre_links)
 
-        films, subgenre = get_final_film_titles(
-            chosen_genre["url"], desired_subgenre=args.s
-        )
+        films, subgenre = get_final_film_titles(chosen_genre["url"], desired_subgenre=args.s)
         if not films:
-            verbose_print(
-                f"No films found for {chosen_genre['genre']} in {chosen_country['country']}. Skipping."
-            )
+            verbose_print(f"No films found for {chosen_genre['genre']} in {chosen_country['country']}. Skipping.")
             attempts += 1
             continue
 
@@ -359,16 +332,12 @@ def main():
             continue
 
         chosen_film = random.choice(remaining_choices)
-        results.append(
-            {
-                "Country": chosen_country["country"],
-                "Genre": simplify_label(
-                    chosen_genre["genre"], chosen_country["country"]
-                ),
-                "Subgenre": simplify_label(subgenre, chosen_country["country"]),
-                "Film": chosen_film,
-            }
-        )
+        results.append({
+            "Country": chosen_country["country"],
+            "Genre": simplify_label(chosen_genre["genre"], chosen_country["country"]),
+            "Subgenre": simplify_label(subgenre, chosen_country["country"]),
+            "Film": chosen_film,
+        })
         attempts += 1
 
     results.sort(key=lambda x: (x["Country"], x["Genre"], x["Subgenre"], x["Film"]))
@@ -380,10 +349,7 @@ def main():
     print(header)
     print("-" * len(header))
     for row in results:
-        print(
-            f"{row['Country']:<{col_widths['Country']}}{row['Genre']:<{col_widths['Genre']}}{row['Subgenre']:<{col_widths['Subgenre']}}{row['Film']:<{col_widths['Film']}}"
-        )
-
+        print(f"{row['Country']:<{col_widths['Country']}}{row['Genre']:<{col_widths['Genre']}}{row['Subgenre']:<{col_widths['Subgenre']}}{row['Film']:<{col_widths['Film']}}")
 
 if __name__ == "__main__":
     main()
